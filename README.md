@@ -1,4 +1,4 @@
 # Advanced-Analytics
 
-## Project
+## Projects
 - Credit card application approval
