@@ -1,0 +1,150 @@
+---
+title: "GLM_model"
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+date: "2023-11-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Section 0: Introduction
+
+# Section 1: Pre-processing the data
+## 1.1: Loading/Attaching Packages
+
+Within our libraries section we load all of the libraries needed to run our code and complete our models and analysis. There are 3 libraries run in total for this project.
+```{r, cache=TRUE}
+library(caret)
+library(class)
+library(neuralnet)
+library(kernlab)
+library(C50)
+library(tidyr)
+library(dplyr)
+library(janitor)
+```
+
+## 1.2: Downloading and Prepping the Data
+```{r, cache=TRUE}
+hotel <- read.csv("hotel_bookings.csv", stringsAsFactors = TRUE)
+summary(hotel)
+
+#1) creating sample data
+  #(1) can change the ratio to 1: to use the whole data
+  #(2) random sample: will not skew your result
+
+set.seed(12345)
+sample_size <- 0.25
+hotel <- hotel[sample(1:nrow(hotel), sample_size*nrow(hotel)), ]
+
+summary(hotel)
+str(hotel)
+```
+
+```{r, cache=TRUE}
+#sort(table(hotel$country), decreasing=T)
+#sort(table(hotel$agent), decreasing=T)
+#sort(table(hotel$company), decreasing=T)
+
+#Makes hotelmm smaller by taking top largest factors of any variables with more than 15 factors and making all else '999'
+hotel$country <- as.character(hotel$country)
+hotel$country <- ifelse(!(hotel$country=="PRT" | hotel$country=="GBR" | hotel$country=="FRA" | hotel$country=="ESP" | hotel$country=="DEU" ), "999", hotel$country )
+hotel$country <- as.factor(hotel$country)
+
+hotel$agent <- as.character(hotel$agent)
+hotel$agent <- ifelse(!(hotel$agent=="9" | hotel$agent=="NULL" | hotel$agent=="240" | hotel$agent=="1"), "999", hotel$agent)
+hotel$agent <- as.factor(hotel$agent)
+
+hotel$company <- as.character(hotel$company)
+hotel$company <- ifelse(! (hotel$company == "NULL" | hotel$company == "40" | hotel$company == "223"), "999", hotel$company)
+hotel$company <- as.factor(hotel$company)
+
+#2) deleting predictors with no predicting value
+hotel$reservation_status <- NULL
+hotel$reservation_status_date <- NULL
+hotel$children <- ifelse(is.na(hotel$children), 0, hotel$children)
+
+hotel$assigned_room_type <- as.character(hotel$assigned_room_type)
+hotel$assigned_room_type <- ifelse(hotel$assigned_room_type =="L", "H", hotel$assigned_room_type)
+hotel$assigned_room_type <- ifelse(hotel$assigned_room_type =="P", "H", hotel$assigned_room_type)
+hotel$assigned_room_type <- as.factor(hotel$assigned_room_type)
+
+hotel$reserved_room_type <- as.character(hotel$reserved_room_type)
+hotel$reserved_room_type <- ifelse(hotel$reserved_room_type =="L", "H", hotel$reserved_room_type)
+hotel$reserved_room_type <- ifelse(hotel$reserved_room_type =="P", "H", hotel$reserved_room_type)
+hotel$reserved_room_type <- as.factor(hotel$reserved_room_type)
+table(hotel$reserved_room_type)
+
+hotel$distribution_channel <- as.character(hotel$distribution_channel)
+hotel$distribution_channel <- ifelse(hotel$distribution_channel == "Undefined", "GDS", hotel$distribution_channel)
+hotel$distribution_channel <- as.factor(hotel$distribution_channel)
+
+hotel$market_segment <- as.character(hotel$market_segment)
+hotel$market_segment <- ifelse(hotel$market_segment == "Undefined", "Complementary", hotel$market_segment)
+hotel$market_segment <- as.factor(hotel$market_segment)
+
+summary(hotel)
+```
+
+## 1.3: Getting Data Ready for Analysis
+
+To ensure that the data is prepared for model analysis it is further cleaned. Telemm data is created using model.matrix such that all factors are transformed into dummy variables so that a knn model can be run. The dummy variables are necessary for knn as that model requires all numeric inputs. Afterwards, the data is normalized to be used within the ANN and KNN models.
+```{r, cache=TRUE}
+#1) converting all of the factors into dummy variables
+  #(1) creating a model matrix hotelmm for the data, excluding the intercept term
+hotelmm <- as.data.frame(model.matrix(~.-1, hotel))
+hotelmm <- clean_names(hotelmm)
+
+str(hotelmm)
+summary(hotelmm)
+
+#2) normalizing the data: important because both KNN & ANN are very scale dependent and without normalization could lead to incorrect classification
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+  #(1_normalize everything for KNN and ANN
+hotel_norm <- as.data.frame(lapply(hotelmm, normalize))
+
+summary(hotel_norm)
+```
+
+
+## 1.4: Creating Train & Test samples for each model
+```{r, cache=TRUE}
+set.seed(12345)
+train_prop <- 0.5
+train_set <- sample(1:nrow(hotelmm), train_prop*nrow(hotelmm))
+
+#2) Train set and test set for logistic regression
+hotel_train_log <- hotel[train_set, ]
+hotel_test_log <- hotel[-train_set, ]
+```
+
+# Section 2: Building the Model(First Level) - GLM
+```{r, cache=TRUE}
+#1) building the model
+glm_basemodel <- glm(is_canceled ~.+ adults*children + adults*babies + adults*country + previous_cancellations*previous_bookings_not_canceled + I(previous_bookings_not_canceled * previous_bookings_not_canceled) + booking_changes*previous_cancellations, data=hotel_train_log, family="binomial")
+
+logistic_model_step <- step(glm_basemodel, direction="backward", trace=0)
+
+#2) making prediction
+glm_baseprediction <- predict(logistic_model_step, hotel_test_log, type='response')
+bin_prediction <- ifelse(glm_baseprediction >=0.3, 1, 0)
+
+#3) evaluating the model
+confusionMatrix(as.factor(bin_prediction), as.factor(hotel_test_log$is_canceled), positive ="1")
+```
+
+
+# Section 3: saveRDS the tanh model
+```{r}
+#1) save the model to a file
+saveRDS(logistic_model_step, "log_model.rds")
+```
+

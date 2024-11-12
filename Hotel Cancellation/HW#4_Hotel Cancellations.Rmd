@@ -1,0 +1,398 @@
+---
+title: "HW#4_Hotel Cancellations"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+author: "Carolyn Ha"
+date: "2023-11-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Section 0: Abstract
+
+For this homework assignment, the goal is to construct Logistic Regression, KNN, ANN, SVM, and DT as first-level models, with a DT serving as the second-level model. The approach involves a stacked modeling strategy, with a 50:50 ratio for Train:Test in the first level and a 70:30 ratio for Train:Test in the second level. The second-level DT incorporates a Cost Matrix.
+
+The Cost Matrix information is outlined as follows: 
+
+- **False Positive(each unoccupied hotel room)** = revenue loss of $200
+- **False Negative(more customer arrivals than available rooms)** = cost of $800 per room night
+
+
+**Step 1)**
+In addressing the *first-level model*:
+I've set the sample size to 25% of the entire dataset to reduce code execution time while enhancing the model by
+
+- *Logistic Regression*: Experimenting with the creation of an extensive model involving various interactions and utilizing the backward step function to select critical features influencing the final outcome.
+- *KNN*: Exploring different k values.
+- *ANN*: Experimenting with various stepmax, threshold, and hidden neurons.
+- *SVM*: Testing different kernels to identify the most suitable one for the dataset.
+
+Additionally, I've built distinct first-level models in separate RMD files and saved them as RDS files for later reference.
+
+**Step 2)**
+To enhance the *second-level model*, I experimented with different error costs. Varied error costs impact the balance between false negatives and false positives. Although the cost information (false negatives incurring a cost of $800 and false positives costing $200) is not directly integrated into the second-level model, I aimed to minimize false negatives, given that a single decrease in false negatives is equivalent to four decreases in false positives.
+
+**Step 3)**
+After constructing the second-level model, I created a data frame based on different metrics such as false negatives (costing $800 to the hotel), false positives (costing $200 to the hotel), kappa, and accuracy of the model. The underlying assumption was that by optimizing all first-level models to their fullest extent and incorporating error costs aligned with accounting assumptions and expenses, the second-level model would be maximally effective.
+
+
+
+# Section 1: Pre-processing the data
+## 1.1: Loading/Attaching Packages
+
+Within our libraries section we load all of the libraries needed to run our code and complete our models and analysis.
+```{r, cache=TRUE}
+library(caret)
+library(class)
+library(neuralnet)
+library(kernlab)
+library(C50)
+library(tidyr)
+library(dplyr)
+library(janitor)
+```
+
+
+## 1.2: Downloading and Prepping the Data
+
+Data preparation involves several steps:
+
+- Converting all character data into factors
+- Compressing the features with an excessive number of factors. This is achieved by combining the smallest factors to decrease the feature's size.(In order to merge factors, we must first convert them to character format, and then, once the combination process is complete, revert them to factors.)
+- Adjusting the sample size to 25% to decrease computational time. Since the dataset proportions remain consistent, this adjustment does not impact the predictive performance.
+```{r, cache=TRUE}
+hotel <- read.csv("hotel_bookings.csv", stringsAsFactors = TRUE)
+summary(hotel)
+
+#1) creating sample data
+  #(1) can change the ratio to 1: to use the whole data
+  #(2) random sample: will not skew your result
+
+set.seed(12345)
+sample_size <- 0.25
+hotel <- hotel[sample(1:nrow(hotel), sample_size*nrow(hotel)), ]
+
+summary(hotel)
+str(hotel)
+```
+
+
+```{r, cache=TRUE}
+#sort(table(hotel$country), decreasing=T)
+#sort(table(hotel$agent), decreasing=T)
+#sort(table(hotel$company), decreasing=T)
+
+#Makes hotelmm smaller by taking top largest factors of any variables with more than 15 factors and making all else '999'
+hotel$country <- as.character(hotel$country)
+hotel$country <- ifelse(!(hotel$country=="PRT" | hotel$country=="GBR" | hotel$country=="FRA" | hotel$country=="ESP" | hotel$country=="DEU" ), "999", hotel$country )
+hotel$country <- as.factor(hotel$country)
+
+hotel$agent <- as.character(hotel$agent)
+hotel$agent <- ifelse(!(hotel$agent=="9" | hotel$agent=="NULL" | hotel$agent=="240" | hotel$agent=="1"), "999", hotel$agent)
+hotel$agent <- as.factor(hotel$agent)
+
+hotel$company <- as.character(hotel$company)
+hotel$company <- ifelse(! (hotel$company == "NULL" | hotel$company == "40" | hotel$company == "223"), "999", hotel$company)
+hotel$company <- as.factor(hotel$company)
+
+#2) deleting predictors with no predicting value
+hotel$reservation_status <- NULL
+hotel$reservation_status_date <- NULL
+hotel$children <- ifelse(is.na(hotel$children), 0, hotel$children)
+
+hotel$assigned_room_type <- as.character(hotel$assigned_room_type)
+hotel$assigned_room_type <- ifelse(hotel$assigned_room_type =="L", "H", hotel$assigned_room_type)
+hotel$assigned_room_type <- ifelse(hotel$assigned_room_type =="P", "H", hotel$assigned_room_type)
+hotel$assigned_room_type <- as.factor(hotel$assigned_room_type)
+
+hotel$reserved_room_type <- as.character(hotel$reserved_room_type)
+hotel$reserved_room_type <- ifelse(hotel$reserved_room_type =="L", "H", hotel$reserved_room_type)
+hotel$reserved_room_type <- ifelse(hotel$reserved_room_type =="P", "H", hotel$reserved_room_type)
+hotel$reserved_room_type <- as.factor(hotel$reserved_room_type)
+table(hotel$reserved_room_type)
+
+hotel$distribution_channel <- as.character(hotel$distribution_channel)
+hotel$distribution_channel <- ifelse(hotel$distribution_channel == "Undefined", "GDS", hotel$distribution_channel)
+hotel$distribution_channel <- as.factor(hotel$distribution_channel)
+
+hotel$market_segment <- as.character(hotel$market_segment)
+hotel$market_segment <- ifelse(hotel$market_segment == "Undefined", "Complementary", hotel$market_segment)
+hotel$market_segment <- as.factor(hotel$market_segment)
+
+summary(hotel)
+```
+
+
+
+## 1.3: Getting Data Ready for Analysis
+
+To ensure that the data is prepared for model analysis it is further cleaned. hotelmm data is created using model.matrix such that all factors are transformed into dummy variables so that a knn model can be run. The dummy variables are necessary for knn as that model requires all numeric inputs. Afterwards, the data is normalized to be used within the ANN and KNN models.
+```{r, cache=TRUE}
+#1) converting all of the factors into dummy variables
+  #(1) creating a model matrix hotelmm for the data, excluding the intercept term
+hotelmm <- as.data.frame(model.matrix(~.-1, hotel))
+hotelmm <- clean_names(hotelmm)
+
+str(hotelmm)
+summary(hotelmm)
+
+#2) normalizing the data: important because both KNN & ANN are very scale dependent and without normalization could lead to incorrect classification
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+  #(1)normalize everything for KNN and ANN
+hotel_norm <- as.data.frame(lapply(hotelmm, normalize))
+
+summary(hotel_norm)
+```
+
+## 1.4: Creating Train & Test samples for each model
+
+- logistic regression: use the original dataset => hotel
+- KNN, ANN: use numeric(dummy variable) & normalized => hotel_norm
+- Decision Tree, SVM: use numeric(dummy variable) & non-normalized => hotelmm
+```{r, cache=TRUE}
+set.seed(12345)
+train_prop <- 0.5
+train_set <- sample(1:nrow(hotelmm), train_prop*nrow(hotelmm))
+
+#1) Train & Test set for KNN
+  #(1) x value for KNN
+hotel_train_knn_x <- hotel_norm[train_set, -3]
+hotel_test_knn_x <- hotel_norm[-train_set, -3]
+
+  #(2) y value for KNN
+hotel_train_knn_y <- hotel_norm[train_set, 3]
+hotel_test_knn_y <- hotel_norm[-train_set, 3]
+
+
+#2) Train set and test set for logistic regression
+hotel_train_log <- hotel[train_set, ]
+hotel_test_log <- hotel[-train_set, ]
+
+
+#3) Train set and test set for ANN
+hotel_train_ann <- hotel_norm[train_set, ]
+hotel_test_ann <- hotel_norm[-train_set, ]
+
+
+#4) Train set and test set for SVM
+hotel_train_SVM <- hotelmm[train_set, ]
+hotel_test_SVM <- hotelmm[-train_set, ]
+
+
+#5) Train set and test set for Decision Tree
+hotel_train_DT <- hotelmm[train_set, ]
+hotel_test_DT <- hotelmm[-train_set, ]
+```
+
+
+# Section 2: Building the Model (first level)
+## 2.1: Logistic Regression
+
+Enhancing the logistic regression involves the following steps:
+
+- Constructing an extensive model that incorporates all interactions. -> Employing the step function to optimize this comprehensive model.
+- Optionally, lowering the binprediction threshold to increase the number of 1 predictions and boost the kappa score.
+```{r, cache=TRUE}
+#1) reading the model
+GLM_model <- readRDS("log_model.rds")
+glm_baseprediction <- predict(GLM_model, hotel_test_log, type='response')
+bin_prediction <- ifelse(glm_baseprediction >=0.3, 1, 0)
+
+#2) evaluating the model
+confusionMatrix(as.factor(bin_prediction), as.factor(hotel_test_log$is_canceled), positive ="1")
+```
+
+## 2.2: KNN
+
+Enhancing the KNN involves the following steps:
+
+- Minimize the value of K as much as possible by commencing with the square root of the total dataset size.
+```{r, cache=TRUE}
+#1) reading the model
+KNN_model <- readRDS("knn_model.rds")
+knn_probability <- attr(KNN_model, "prob")
+knn_binprediction <- ifelse(KNN_model >=0.2, 1, 0)
+
+#2) evaluating the model
+confusionMatrix(as.factor(KNN_model), as.factor(hotel_test_knn_y), positive = '1')
+```
+
+## 2.3: ANN
+
+Enhancing the ANN involves the following steps:
+
+- Adjust the number of hidden neurons in the neural network.
+- For faster convergence in the artificial neural network (ANN):
+(1) Modify the "stepmax," which determines the maximum number of iterations before convergence is deemed unsuccessful. The default is 1e5; consider using 1e8.
+(2) Fine-tune the "threshold," representing the step size for weight adjustments in each cycle. The default is 0.01; increasing it to 0.05 can expedite convergence but may impact accuracy negatively.
+```{r, cache=TRUE}
+#1) reading the model
+ANN_model <- readRDS("ANN_model.rds")
+
+#2) predicting
+ANN_prediction <- predict(ANN_model, hotel_test_ann)
+
+#3) evaluating the model
+ANN_binprediction <- ifelse(ANN_prediction>=0.2, 1, 0)
+
+confusionMatrix(as.factor(ANN_binprediction), as.factor(hotel_test_ann$is_canceled), positive = '1')
+```
+
+## 2.4: SVM
+
+Enhancing the SVM involves the following steps:
+
+- Experimenting with various kernels, with rbfdot often yielding the optimal results.
+```{r, cache=TRUE}
+#1) building the model
+SVM_model <- readRDS("rbf_model.rds")
+
+#2) predicting
+SVM_prediction <- predict(SVM_model, hotel_test_SVM)
+
+
+#3) evaluating the model
+SVM_binprediction <- ifelse(SVM_prediction >=0.2, 1,0) 
+confusionMatrix(as.factor(SVM_binprediction), as.factor(hotel_test_SVM$is_canceled), positive = '1')
+```
+
+## 2.5: Decision Tree
+```{r, cache=TRUE}
+#1) building the model
+DT_model <- C5.0(as.factor(is_canceled)~., data=hotel_train_DT)
+
+#2) predicting
+DT_prediction <- predict(DT_model, hotel_test_DT)
+
+#3) evaluating the model
+confusionMatrix(as.factor(DT_prediction), as.factor(hotel_test_DT$is_canceled), positive='1')
+
+plot(DT_model)
+summary(DT_model)
+```
+
+
+# Section 3: Combined Model
+
+The combined/stacked model is constructed by utilizing the predictions from each initial model as a new dataset. A dataframe is generated from these predictions, and the model is trained using a 70:30 ratio for the training-test dataset, employing the Decision Tree algorithm.
+
+## 3.1: Combine Vectors
+```{r, cache=TRUE}
+hotel_preds <- data.frame(
+  log = glm_baseprediction,
+  knn = knn_probability,
+  ann = ANN_prediction,
+  svm = SVM_prediction,
+  decision_tree = DT_prediction,
+  true = hotel_test_ann$is_canceled
+)
+
+tail(hotel_preds)
+write.csv(hotel_preds, "hotel_preds.csv")
+```
+
+## 3.2: New train & test datasets for the second level model
+
+```{r, cache=TRUE}
+#1) use 30% for training & 70% for testing
+set.seed(12345)
+tree_rows <- sample(1:nrow(hotel_preds), 0.7*nrow(hotel_preds))
+
+tree_train <- hotel_preds[tree_rows, ]
+tree_test <- hotel_preds[-tree_rows, ]
+```
+
+
+## 3.3: Build Decision Tree
+
+Enhancing the second level Decision Tree involves the following steps:
+
+- Modifying the error costs.
+- Error cost works differently with the accounting cost. To effectively utilize the accounting cost, one must consider the data's inherent imbalance, where actual cancellations are less frequent than reservations. Furthermore, it's crucial to account for the following cost factors:
+- **cost associated with False Negatives (prediction: 0 [won't cancel], actual: 1 [did cancel])** = 200
+-  **cost of False Positives (prediction: 1 [will cancel], actual: 0 [didn't cancel])** = 800 (no room)
+
+```{r, cache=TRUE}
+#2) build second level Decision Tree model
+  #(1) add error cost
+  #(2) use 'tele_preds$true' as the y value
+error_cost <- matrix(c(0, 1.5, 1,0), nrow=2)
+
+DT_model_second_level <- C5.0(as.factor(true)~., data=tree_train, costs = error_cost)
+
+#3) predicting
+DT_model_second_level_prediction <- predict(DT_model_second_level, tree_test)
+  
+#4) evaluating
+confusionMatrix(as.factor(DT_model_second_level_prediction), as.factor(tree_test$true), positive="1")
+
+plot(DT_model_second_level)
+
+saveRDS(DT_model_second_level, "DT_model_second_level.rds")
+```
+
+
+
+# Section 4: Conclusion
+```{r, cache=TRUE}
+#1) explaining confusion matrix
+confusion_matrix <- matrix(0, nrow = 3, ncol = 3)
+confusion_matrix[1,2] <- "Actually Negative(0)"
+confusion_matrix[1,3] <- "Actually Positive(1)"
+confusion_matrix[2,1] <- "Predicted Negative(0)"
+confusion_matrix[3,1] <- "Predicted Positive(1)"
+confusion_matrix[2, 2] <- "True Negatives(TN)"
+confusion_matrix[2, 3] <- "False Negative(FN): cost(200)"
+confusion_matrix[3, 3] <- "True Positives (TP)"
+confusion_matrix[3, 2] <- "False Positives (FP): cost(800)"
+
+confusion_df <- as.data.frame(confusion_matrix)
+knitr::kable(confusion_df, align = "c")
+```
+- 0 = negative = not canceled = would come
+- 1 = positive = cancel
+
+- **False Negative = predict(0: come), actual(1: not come) = cost: 200** : Indicates an unoccupied hotel room, resulting in a loss of $200 in revenue.
+- **False Positive = predict(1: not come), actual(0: come) = cost:800**: More customer arrivals than available rooms, necessitating the costly process of accommodating customers in a competitor hotel, incurring a charge of $800 per room night.
+
+
+
+```{r}
+#2) creating the dataframe with the results
+model_names <- c("Logistic Regression", "KNN", "ANN", "SVM", "Decision Tree", "Decision Tree (Second Level)")
+
+data <- data.frame(
+  "False Negative" = c(677, 1570, 350, 564, 1126, 400),
+  "False Positive" = c(2307, 1609, 3110, 2432, 1046, 220), 
+  "Kappa" = c(0.5951, 0.5425, 0.5489, 0.597, 0.686, 0.6963),
+  "Accuracy" = c(0.8001, 0.787, 0.7682, 0.7992, 0.8545, 0.8615)
+)
+
+#3) Set row names for the data frame
+rownames(data) <- model_names
+
+data_df <- as.data.frame(data)
+knitr::kable(data_df, align = "c")
+```
+
+The outcomes, including the counts of False Negatives, False Positives, Kappa, and Accuracy, for both the first-level models and the second-level model are outlined above. With each model optimized to its fullest potential, the second-level model achieves the highest Kappa value of 0.6963. This suggests that the hotel company can effectively use this model for predicting possible cancellations. In the context of minimizing revenue loss, it's crucial to prioritize lower false positives. Among the first-level models, the decision tree emerges as the most critical model for revenue loss mitigation. When it comes to predicting occupancy, minimizing false negatives becomes paramount, and in this regard, the Artificial Neural Network (ANN) excels.
+
+The model can address the following questions:
+
+- **Occupancy Prediction**: What is the predicted occupancy rate for the hotel based on historical data and current trends? How can we forecast future occupancy levels to optimize staffing and resources?
+
+- **Revenue Maximization(Questions related to overbooking)**: —How can we adjust pricing strategies to maximize revenue, considering the cost implications of unoccupied rooms? What is the optimal balance between room rates and occupancy to achieve maximum profitability? *Utilize the confusion matrix, considering the total number of reservations, model predictions of cancellation (1 prediction/total predictions), and the model's successful predictions (True Positives/1 prediction).*
+
+- **Customer Management**: Can the model identify patterns in customer arrivals that may impact room availability? *Use the summary(glm_model) to assess the significance of variables in prediction. A low p-value indicates high significance.*
+
+- **Scenario Planning**: What would be the financial impact of changes in hotel policies, such as cancellation fees or promotional offers?
