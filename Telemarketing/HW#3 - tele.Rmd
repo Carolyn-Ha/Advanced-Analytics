@@ -1,0 +1,411 @@
+---
+title: "Group project_Telemarketing"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+author: "Group 6 - Team WorldWide"
+date: "2023-10-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Call Center Financial Modeling: Increasing Profitability
+
+# Section 0: Introduction 
+  Given the dismal working qualities of day-in-day-out work within the call center, retention rates have depressed and the firm has seen training costs grow as they are forced to replace the employees who have quit. The firm is looking to better understand ways in which the call center can become lucrative, rather than seeing financial losses. One such way that this has been done is through data collection and analysis to better understand individuals who are interested in purchasing the products. The identification of prospective clients is integral to profitability as yes rates increase, it boosts morale amongst call center employees, generates per-product revenue, and encourages employees to stay rather than leave. With more employees staying, training cost expenditures fall and callers become more efficient allowing for even more products to be sold. Thus, cost falls and revenue rises benefiting the callers, the call center, the firm, and the clients purchasing the product. 
+  To assess niches of individuals who would be interested in the product being sold, three different models were constructed for analysis. The first one is a K Means Clustering model which randomizes data and sorts it into clusters to find relationships between variables and the population. The second model used is a KNN Model which approximates the association between independent variables and a continuous outcome by averaging the observations within the same neighborhood. Lastly, an ANN model was built by creating neural pathways to help predict outcomes of callers purchasing products or not, learning from the data that it is fed and creating predictions accordingly. At the conclusion of each model’s development and running, a confusion matrix is created to analyze the model’s predictions of buyers vs non-buyers and from there an expected profit is calculated. Within profit calculation, the following attributes are considered:
+  **Variable cost per call:** $1
+  **Contribution margin per successful call:** $10
+  **Average cost of training each call associate:** $1000
+  **Current average retention rate for call associates:** 1000 calls
+  Every **1% increase in call success** rate **increased** the average 
+  **retention** rate **by 100 calls**
+  With these parameters in mind and the profitability calculated, retention and efficiency cost savings are calculated and added to the initial profit calculations. These calculations are done for each model.
+	The final aspect of the work done for the firm is the combination of the three aforementioned models (ANN, KNN, Clustering) into one final model that looks at the outputs for each individual model and selects the most common one – ⅔ being either a Yes or a No– and assigns that as the final value for which profit, retention, and savings are calculated. 
+	
+	
+# Section 1: Pre-processing the data
+## 1.1: Loading/Attaching Packages
+
+Within our libraries section we load all of the libarires needed to run our code and complete our models and analysis. There are 3 libraries run in total for this project.
+
+```{r}
+library(class)
+library(caret)
+library(neuralnet)
+```
+
+
+## 1.2: Downloading and Prepping the Data
+
+The data used to conduct our analysis is the Tele data set which is downloaded within this chunk. Initially, all of the data is downloaded as a factor so that individual variables do not need to be converted later. The duration and X columns are removed for cleaning purposes. Additionally the pdays (pay days) variable is turned into a new dummy variable and the original pdays column is deleted.
+
+```{r, cache=TRUE}
+#1) Downloading and Prepping the Data
+tele <- read.csv("tele.csv", stringsAsFactors = TRUE)
+summary(tele)
+
+#2) We are deleting the "duration" variable because it is an after the fact measurement. We only should be using variables that we know before the call
+tele$duration <- NULL
+
+#3) Deleting the column X
+tele$X <- NULL
+
+#4) Changing pdays to a dummy and deleting pdays
+tele$pdaysdummy <- ifelse(tele$pdays == 999, 0, 1)
+tele$pdays <- NULL
+
+str(tele)
+```
+
+## 1.3: Getting Data Ready for Analysis
+
+To ensure that the data is prepared for model analysis it is further cleaned. Telemm data is created using model.matrix such that all factors are transformed into dummy variables so that a knn model can be run. The dummy variables are necessary for knn as that model requires all numeric inputs. Afterwards, the data is normalized to be used within the ANN and KNN models.
+
+```{r, cache=TRUE}
+# Using model.matrix to convert all the factors to dummy variables
+# We are converting all of the factors into dummy variables as the input into knn has to be numeric
+
+telemm <- as.data.frame(model.matrix(~.-1,tele))
+str(telemm)
+
+#Normalize the data
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+# we are going to normalize everything for KNN and ANN
+tele_norm <- as.data.frame(lapply(telemm, normalize))
+```
+
+
+## 1.4: Creating Train & Test samples for each model
+
+Once cleaning is complete, the tele data is randomized and split into training data to train the model and test data to check its accuracy. The test data is normalized such that it is normalized for 10,000 random rows rather than the entire data set. Train and test are set individually for each model below. Each is done the same way except for the KNN splitting which ensures that Yyes (the y value) is taken out of the training data. 
+
+```{r, cache=TRUE}
+# Selects 10000 random rows for test data
+set.seed(12345)
+test_set <- sample(1:nrow(tele_norm), 10000) 
+# Depending on R-version and computer, different rows may be selected. 
+# If that happens, results are different. 
+
+
+#1) Create a train set and test set for KNN
+#First the predictors - all columns except the yyes column
+  #x value for KNN
+tele_train <- tele_norm[-test_set, -match("yyes",names(tele_norm))]
+tele_test <- tele_norm[test_set, -match("yyes",names(tele_norm))]
+
+#Now the response (aka Labels) - only the yyes column
+  #y value for KNN
+tele_train_labels <- tele_norm[-test_set, "yyes"]
+tele_test_labels <- tele_norm[test_set, "yyes"]
+
+
+#2) Train set and test set for logistic regression
+tele_train_log <- telemm[-test_set, ]
+tele_test_log <- telemm[test_set, ]
+
+
+#3) Train set and test set for ANN
+tele_train_ann <- tele_norm[-test_set, ]
+tele_test_ann <- tele_norm[test_set, ]
+
+```
+
+
+# Section 2: KMeans Clustering
+## 2.1: Creating Clusters
+
+  The KMeans Clustering model uses clusters to identify trends and patterns within the data. For our specific task at hand -increasing call center profitability- the clusters look to identify individuals who when called are most likely to buy the product being sold. The clusters look to find similarities within these groups to help more efficiently allocate resources and raise profit. 
+  The first step of the model is removing y (yyes) from the clusters. From here a cluster size of 4 is set as after testing it proved to be the most effective cluster size in giving accurate data without over or under fitting. The size and center of the clusters are then normalized and analyzed. 
+  
+```{r, cache=TRUE}
+#1) creating clusters
+tele_norm_no_y <- tele_norm[,-53]
+tele_clusters <- kmeans(tele_norm_no_y, 7)
+
+#2) checking the size & center
+tele_clusters$size
+tele_clusters$centers
+
+#3) improving the model
+  #(1) adding cluster as a label -> making another column
+  #(2) need to do this part after building prediction model: can't use the label as another predictor
+tele_norm$cluster <- tele_clusters$cluster
+
+tapply(tele_norm$yyes, tele_norm$cluster, mean, na.rm=T)
+```
+
+## 2.2: Interpretation of Target Clusters
+-Characteristics of cluster 5:
+High age
+Job:entrepreneur, managemnet, unemployed, retired, marital unknown
+Therefore, we would name this cluster after Cluster old people without jobs
+
+-Characteristics of cluster 7:
+Job: admin/student
+Marital:single
+Housing: yes
+Therefore, we would name this cluster after Cluster single students 
+
+## 2.3: Calculating profit of targeting cluster 5,7
+- calculating the cost
+- higher success rate -> higher retention
+- each associate 1$ per call for associate -> last for longer
+- how much money will I make by calling 5,7
+
+- **Total cost** = (TC+VC)*(total number of calls)
+- **Total revenue** = (revenue per success call) * (total number of success call)
+```{r, cache=TRUE}
+#1) calculate success rate increase
+  #(1) old_rate: calling all customer
+  #(2) new_rate: calling cluster 5,7 => success rate for each cluster * size of each cluster
+
+old_rate <- 4640/(36548+4640)
+new_rate <- (0.36443914*4190 + 0.24162679*5434) / (4190+5434)
+rate_inc <- new_rate-old_rate
+
+
+#2) calculate change in retention rate
+old_retention <- 1000 #per associate
+new_retention <- old_retention + (rate_inc*100)*100 #per associate
+```
+
+```{r, cache=TRUE}
+#3) total cost calculation
+  #(1) vc = variable cost: fixed
+  #(2) tc = training cost = total training cost / new_retention
+vc <- 1
+tc <- 1000/new_retention
+totalcost <- (vc+tc)*9624
+
+
+#4) total revenue calculation
+totalrevenue <- 11*2840 #revenue per success call * number of success call
+
+
+#5) profit calculation
+profit <- totalrevenue - totalcost
+profit
+```
+
+## 2.4: profit after normalization
+
+We are adjusting the profit derived from the K-means clustering to be in line with the 10,000-sample dataset, which matches the scale of the profit calculation for the combined prediction model. Given that the prediction model utilizes and predicts based on 10,000 samples from the entire dataset, the profit calculation is also rooted in the 10,000-sample subset. As a result, we have undertaken the process of scaling down the profit from the K-means clustering as well.
+
+```{r, cache=TRUE}
+#scaleing rate=10000/41188
+#profit * scaling rate
+18208.57*(10000/41188)
+```
+
+
+
+# Section 3: Prediction Model
+## 3.1: Prediction model(1) - KNN classification
+
+Following the establishment of the basemodel, our efforts were focused on achieving three objectives: enhancing positive prediction, reducing False Positives, and keeping the success rate on par with the basemodel. To pursue these goals, we employed a strategy of altering the value of 'k' to maximize sensitivity.
+
+```{r, cache=TRUE}
+#1) building the model
+knnpred <- knn(tele_train, tele_test, tele_train_labels, k=4)
+
+#2) evaluating the model
+confusionMatrix(as.factor(knnpred), as.factor(tele_test_labels), positive = '1')
+```
+- This model exhibits the highest Positive Prediction
+- It effectively reduced the number of False Negatives from 808 (basemodel, k=10) to 800.
+- It raised the number of True Positive from 292 (basemodel) to 300.
+- If we decrease the value of k below 4, False Positives increase rapidly compared to True Positives, leading to a decrease in the overall success rate. On the other hand, if we set k higher than this, False Negatives become excessively high. Therefore, we have selected 4 as the number of centers for our model.
+
+
+
+
+## 3-2. Prediction model(2) - logistic regression
+
+Following the establishment of the basemodel, our efforts were focused on achieving three objectives: enhancing positive prediction, reducing False Positives, and keeping the success rate on par with the basemodel. To pursue these goals, we employed two key strategies: 
+- augmenting the model by introducing additional features into the model's code
+- adjusting the threshold
+
+```{r, cache=TRUE}
+#1) building the model
+glm_basemodel <- glm(yyes~., data = tele_train_log, family = "binomial")
+
+#2) making prediction
+glm_baseprediction <- predict(glm_basemodel, tele_test_log, type='response')
+bin_prediction <- ifelse(glm_baseprediction >=0.5, 1, 0)
+
+#3) evaluating the model
+library(caret)
+confusionMatrix(as.factor(bin_prediction), as.factor(tele_test_log$yyes), positive ="1")
+```
+
+```{r, cache=TRUE}
+#4) improving glm model
+  #(1) backward variable selection
+glm_step1 <- glm(yyes ~ . + age*jobretired + age*jobstudent + I(age*age) + maritalmarried*jobmanagement + maritalsingle*jobstudent + I(sqrt(age)) + educationuniversity.degree*defaultyes, data = tele_train_log, family = "binomial")
+
+step1_final <- step(glm_step1, direction = "backward")
+glm_step1_prediction <- predict(step1_final, tele_test_log, type = "response")
+step1_binpred <- ifelse(glm_step1_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step1_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+
+```{r cache=TRUE}
+  #(2) variation of different interaction(1)
+glm_step2 <- glm(yyes ~ age + educationilliterate + educationuniversity.degree + defaultunknown + contacttelephone + monthaug + monthdec + monthjun + monthmar + monthmay + monthnov + day_of_weekmon + day_of_weekthu + day_of_weektue + day_of_weekwed + campaign + poutcomenonexistent + poutcomesuccess + emp.var.rate + cons.price.idx + cons.conf.idx + euribor3m + nr.employed + pdaysdummy + I(sqrt(age)), data = tele_train_log, family = "binomial")
+
+glm_step2_prediction <- predict(glm_step2, tele_test_log, type = "response")
+step2_binpred <- ifelse(glm_step2_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step2_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+
+```{r, cache=TRUE}
+  #(3) variation of different interaction(2)
+glm_step3 <- glm(yyes ~ age + educationilliterate + educationuniversity.degree + defaultunknown + contacttelephone + monthaug + monthdec + monthjun + monthmar + monthmay + monthnov + day_of_weekmon + day_of_weekthu + day_of_weektue + day_of_weekwed + campaign + poutcomenonexistent + poutcomesuccess + emp.var.rate + cons.price.idx + cons.conf.idx + euribor3m + nr.employed + pdaysdummy + I(sqrt(age)) + I(emp.var.rate*emp.var.rate) + I(cons.price.idx*cons.price.idx) + I(euribor3m*euribor3m) + I(nr.employed*nr.employed), data = tele_train_log, family = "binomial")
+
+glm_step3_prediction <- predict(glm_step3, tele_test_log, type = "response")
+step3_binpred <- ifelse(glm_step3_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step3_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+
+```{r, cache=TRUE}
+  #(4) variation of different interaction(3)
+glm_step4 <- glm(yyes ~ age + educationilliterate + educationuniversity.degree + defaultunknown + contacttelephone + monthaug + monthdec + monthjun + monthmar + monthmay + monthnov + day_of_weekmon + day_of_weekthu + day_of_weektue + day_of_weekwed + campaign + poutcomenonexistent + poutcomesuccess + emp.var.rate + cons.price.idx + cons.conf.idx + euribor3m + nr.employed + pdaysdummy + I(sqrt(age)) + I(emp.var.rate*emp.var.rate) + I(cons.price.idx*cons.price.idx) + I(euribor3m*euribor3m) + I(nr.employed*nr.employed), data = tele_train_log, family = "binomial")
+
+glm_step4_prediction <- predict(glm_step4, tele_test_log, type = "response")
+step4_binpred <- ifelse(glm_step4_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step4_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+
+```{r, cache=TRUE}
+  #(5) variation of different interaction(4)
+glm_step5 <- glm(yyes ~ age + educationilliterate + educationuniversity.degree + defaultunknown + contacttelephone + monthaug + monthdec + monthjun + monthmar + monthmay + monthnov + day_of_weekthu + day_of_weektue + day_of_weekwed + campaign + poutcomenonexistent + poutcomesuccess + emp.var.rate + cons.price.idx + cons.conf.idx + euribor3m + nr.employed + pdaysdummy + I(sqrt(age)) + I(emp.var.rate*emp.var.rate) + I(cons.price.idx*cons.price.idx) + I(euribor3m*euribor3m) + I(nr.employed*nr.employed) + I(pdaysdummy*pdaysdummy) , data = tele_train_log, family = "binomial")
+
+glm_step5_prediction <- predict(glm_step5, tele_test_log, type = "response")
+step5_binpred <- ifelse(glm_step5_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step5_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+
+```{r, cache=TRUE}
+  #(6) variation of different interaction(5)
+glm_step6 <- glm(yyes ~ age + educationilliterate + educationuniversity.degree + defaultunknown + contacttelephone + monthaug + monthdec + monthjun + monthmar + monthmay + monthnov + day_of_weekthu + day_of_weektue + day_of_weekwed + campaign + poutcomenonexistent + poutcomesuccess + emp.var.rate + cons.price.idx + cons.conf.idx + euribor3m + nr.employed + pdaysdummy + I(age*age) + I(sqrt(age)) + I(emp.var.rate*emp.var.rate) + I(cons.price.idx*cons.price.idx) + I(euribor3m*euribor3m) + I(nr.employed*nr.employed) + I(pdaysdummy*pdaysdummy), data = tele_train_log, family = "binomial")
+
+glm_step6_prediction <- predict(glm_step6, tele_test_log, type = "response")
+step6_binpred <- ifelse(glm_step6_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step6_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+
+```{r, cache=TRUE}
+  #(7) variation of different interaction(6)
+glm_step7 <- glm(yyes ~ age + educationilliterate + educationuniversity.degree + defaultunknown + contacttelephone + monthaug + monthdec + monthjun + monthmar + monthmay + monthnov + day_of_weekthu + day_of_weektue + day_of_weekwed + campaign + poutcomenonexistent + poutcomesuccess + emp.var.rate + cons.price.idx + cons.conf.idx + euribor3m + nr.employed + pdaysdummy + I(age*age) + I(sqrt(age)) + I(emp.var.rate*emp.var.rate) + I(cons.price.idx*cons.price.idx) + I(euribor3m*euribor3m) + I(nr.employed*nr.employed) + I(pdaysdummy*pdaysdummy) + age*defaultunknown, data = tele_train_log, family = "binomial")
+
+glm_step7_prediction <- predict(glm_step7, tele_test_log, type = "response")
+step7_binpred <- ifelse(glm_step7_prediction >= 0.2, 1, 0)
+confusionMatrix(as.factor(step7_binpred), as.factor(tele_test_log$yyes), positive = "1")
+```
+- This model(glm_step7) exhibits the highest Positive Prediction
+- It effectively reduced the number of False Negatives from 856(basemodel) to 468.
+- It raised the number of True Positive from 244(basemodel) to 632.
+
+
+
+## 3.3: Prediction model(3) - ANN
+
+When trying to improve the model, we changed the threshold to be lower in order to allow more True Positives. In addition, we tried different kinds of hidden neurons with multiple layers, but found that adding more layers and adding more hidden neurons did not necessarily mean the accuracy would increase. As the number of hidden neurons increased, the accuracy decreased more and more. Thus, we decided that 1 hidden neuron is the best with an accuracy of 87%.
+
+```{r, cache=TRUE}
+#1) building the model
+ANN_model <- neuralnet(formula = yyes ~ . ,
+                              data = tele_train_ann, hidden = 1)
+
+#2) predicting
+ANN_result <- compute(ANN_model, tele_test_ann)
+ANN_predicted_y <- ANN_result$net.result
+
+#3) evaluating the model
+testANNpred <- ifelse(ANN_predicted_y>=0.2, 1, 0)
+
+confusionMatrix(as.factor(testANNpred), as.factor(tele_test_ann$yyes), positive = '1')
+```
+
+- This model exhibits the highest Positive Prediction and Accuracy.
+- It effectively reduced the number of False Negatives from 788(basemodel, threshold=0.5) to 489
+- It raised the number of True Positive from 312(basemodel) to 611.
+
+
+
+
+## 3.4: Combined Result
+```{r, cache=TRUE}
+#1) building the combined prediction model
+yyes_prediction <- data.frame(
+  log = step7_binpred,
+  knn = as.numeric(as.character(knnpred)),
+  ann = testANNpred,
+  actual = tele_test_ann$yyes
+  )
+
+yyes_prediction$prediction <- ifelse(yyes_prediction$log + yyes_prediction$knn + yyes_prediction$ann >=2, 1,0)
+
+
+head(yyes_prediction)
+```
+- The "actual" column displays the data from the "yyes" column in the original dataset.
+- The "prediction" column illustrates the predictions based on the three models, wherein we assign a value of 1 if more than two out of the three models make a prediction of 1.
+
+```{r, cache=TRUE}
+#2) evaluating the model
+confusionMatrix(as.factor(yyes_prediction$prediction), as.factor(tele_test_ann$yyes), positive = '1')
+```
+
+
+
+## 3.5: Calculating Profit
+```{r}
+#1) calculate success rate increase
+  #(1) old_rate: calling all customer
+  #(2) new_rate: calling prediction 1 only
+
+old_rate <- 4640/(36548+4640)
+new_rate <- 615/(809+615)
+rate_inc <- new_rate-old_rate
+
+
+#2) calculate change in retention rate
+old_retention <- 1000 #per associate
+new_retention <- old_retention + (rate_inc*100)*100 #per associate
+```
+
+```{r}
+#3) total cost calculation
+  #(1) vc = variable cost: fixed
+  #(2) tc = training cost = total training cost / new_retention
+vc <- 1
+tc <- 1000/new_retention
+totalcost <- (vc+tc)*1424
+
+
+#4) total revenue calculation
+totalrevenue <- 11*615 #revenue per success call * number of success call
+
+
+#5) profit calculation
+profit <- totalrevenue - totalcost
+profit
+```
+
+
+# Section 4: Conclusion 
+  The results of the models and their combinations make clear that for the call center to increase profitability and retain employees, it is essential that targeted calling is enacted. The K Means Clustering model found that Clusters 5 –classified by older individuals with either no job or very high paying jobs– and Cluster 7 –classified by single students– to be the demographics where cold calling success rates are the highest. The resultant profit of this model after normalizing the data to account for 10,000 samples rather than the entire data set was 4420.843 dollars in combined net profit and savings. The final KNN regression Model ran (Model 7) used the most interactions and yielded the highest accuracy in predicting purchasing rates as well as profit yield. The interaction model exhibited the highest positive prediction and effectively reduced false negatives from its predictions. Similarly,  ANN Model 3 exhibited the highest Positive Prediction and Accuracy and effectively reduced the number of False Negatives from 788 (basemodel, threshold=0.5) to 489, and it raised the number of True Positive from 312 (basemodel) to 611. The single hidden neuron exhibited the highest accuracy and lowest false negatives which, in doing this, profit and savings increased allowing for the call center to see greater revenue growth. The final combined prediction model had the highest rate of positive predictions and reduced the false negatives to the lowest of all the models. The final model found that it could simultaneously create and save a profit of $5001.328 as prediction accuracy and retention increased per 10,000 sample size and given the conditions outlined earlier. 
+	The combined model utilizing Logistic Regression, K-Nearest Neighbor and Artificial
+Neural Networks is a highly accurate but very involved way of predicting customer purchasing trends. There are a few challenges that can be present in implementing such predictive modeling systems into the call center. One such concern is data quality and preparation. It can be challenging to ensure that data collection is accurate, up-to-date, bias free, and legally compliant when reusing these models in the future. Handling proprietary data can be costly and requires close monitoring including within the algorithms themselves to ensure that bias does not appear in the results. Additionally, scale-ability can prove to be a concern in the future for these models as scaling predictive models to handle immense amounts of customer interaction and background details in real time can be laborious in terms of both collection and real-time model running. As data grows, these types of models can be slower at running. Lastly, these models can be difficult to interpret and validate their decisions. Unlike a decision tree model, the logic behind the Logistic Regression, KNN, and ANN model results can be much more convoluted and harder to justify to a superior or executive board if needed. 
+	Additionally, risks are present in the implementaion of these three models and their combination as the sole determinant as to who the firm should call and market to. One of these risks includes the potential for inaccurate predictions. Predictive models do not always provide the most accurate representation and as data gets added and more customers are called, predictions can potentially start to fluctuate in reliability. This, however, can often be mitigated through continuous monitoring and feedback loops set to improve the models’ accuracies. Concomitantly, in the scope of a real firm as more customer data is collected data privacy and security becomes a greater risk. This data proves valuable and hackers or the likes could potentially try to gain unauthorized access causing data breaches and threatening non-compliance with regulation. Thus it is imperative for the firm to increase spending on data security measurements and software which would be a steep, but vital, added cost. Lastly, a pertinent risk to consider is the over-reliance on automotive technology and loss of human judgment. Ultimately, the call center serves to reach humans via humans as a means of selling products. A digital model is not able to account for human judgment and interaction which can sway a customer that it might have marked as 0 in terms of likelihood of buying when in fact they could be convinced. It is integral that these predictive models serve to augment human decision making on whom to call rather than entirely replace it.
+	Despite the myriad of concerns and risks associated with the implementation of these predictive models, their benefits serve to out-weigh many of the aforementioned issues. The three models allow for improved customer service, in that they can better identify the customer being pitched to helping call center agents personalize information and solutions to each individual better. As highlighted in the model results, efficiency greatly increases and workload falls as call center agents have more targeted information making calls quicker and more effective in profit generation. This also helps to boost morale along with firm and individual profit which reduces the turnover of employees and drops the training and variable costs of the firm. Subsequently, revenue will increase as those who have interest in the products are more accurately targeted and able to purchase their desired goods. In terms of call center opperations, the models help to improve workforce management as it becomes easier to forecast call volumes, staff agents, and schedule shifts to ensure optimal resource allocation and profit maximization. Additionally, cross-functional collaboration of departments is able to be realized when using these predictive models as the insight generated from who will say yes to a cold call can help marketing campaigns and product development in refining their product to be more on par with what the customer actually wants and finds enticing. Finally, data-monetization can be utilized strategically and in compliance to regulations, by providing insights into customer preferences and consumer taste trends at a more refined level.
+	Thus, it is clear that the usage of Logistic Regression, KNN, and ANN models serve as an enhancement to business functioning and profit maximization and should be implemented. To implement these strategies, expertise, infrastructure, and intra-frim complaince are essential. Employing data scientists, machine learning engingeers, and domain experts is neccessary for mainting and advancing the predictive models as well as interpreting their results in a useful and readable manner. Additionally, the infrastructure for capturing and analyzing the data must be invested in, such as cloud computing, data storage, and model support systems. Management and all employees must be briefed on the changes and a standardized procedure must be established and implemented regarding the predictions such that they are utilized in an efficient and accurate manner by call center agents. Lastly, a system must be in place to capture the live-time results of the call center agents using the predictive analytics in their calls. This collected data determining whether the model was actually accurate or not should be re-purposed back into the original models to make them even more accurate. Conclusively, given the high profits and savings yielded by all three models and their combined predictive capacity, it is clear that using predictive modeling is essential for reducing costs, increasing profit, and ensuring the longevity of the firm should it be implemented and managed appropriately.
