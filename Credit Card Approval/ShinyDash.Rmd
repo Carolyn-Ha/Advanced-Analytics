@@ -1,0 +1,188 @@
+---
+title: "ShinyDash"
+author: "Siena Mizel"
+date: "2023-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(shinydashboard)
+library(shiny)
+```
+
+
+
+### Background 
+
+```{r}
+# 1) Building the model with cross-validation
+set.seed(12345)
+DT_model <- train(as.factor(approval_status) ~ .,
+                  data = ccmm,
+                  method = "C5.0",
+                  trControl = trainControl(method = "cv", number = 4),
+                  )  # 4-fold cross-validation
+
+# 2) Predicting
+shinydata <- ccmm[1,]
+plot(DT_model)
+saveRDS(DT_model, "DT_model.rds")
+str(ccmm)
+
+```
+
+
+### Dashboard and Output
+```{r}
+ui <- dashboardPage(
+  dashboardHeader(title = "Credit Card Application"),
+  dashboardSidebar(),
+  dashboardBody(
+    fluidRow(
+      box(
+        title = "Personal Application Questions",
+        width = 6,
+        solidHeader = TRUE,
+        sliderInput("age", "Select your age:",
+                    min = 0, max = 150, value = 2),
+        radioButtons("gender", "Select your gender:",
+                     choices = c("Male", "Female")),
+        radioButtons("marital", "Select your marital status:",
+                     choices = c("Married", "Single")),
+        radioButtons("credit", "Have you previously had a credit card:",
+                     choices = c("Yes", "No")),
+        radioButtons("default", "Have you had a prior default with a credit card:",
+                     choices = c("Yes", "No")),
+         radioButtons("employed", "Are you employed:",
+                     choices = c("Yes", "No")),
+        sliderInput("income", "Select your annual income:",
+                    min = 0, max = 100000, value = 5000),
+        sliderInput("creditscore", "If you have a prior credit card, please select your current credit score:",
+                    min = 0, max = 67, value = 5),
+        actionButton("submit", "Submit"),
+        verbatimTextOutput("result")
+      )
+    )
+  )
+)
+
+server <- function(input, output) {
+  output$result <- renderPrint({
+    if (!is.null(input$submit) && input$submit > 0) {
+      input_data <- data.frame(
+        age = input$age,
+        gender = input$gender,
+        marital = input$marital,
+        credit = input$credit,
+        creditscore = input$creditscore,
+        default = input$default,
+        employed = input$employed,
+        income = input$income
+      )
+      shinydata$age = input$age
+      shinydata$income = input$income
+      shinydata$credit_score = as.numeric(input$creditscore)
+      shinydata$employedt = ifelse(input$employed == "Yes", 1, 0)
+      shinydata$gendera = ifelse(input$gender == "Male", 1, 0)
+      shinydata$genderb = ifelse(input$gender == "Female", 1, 0)
+      shinydata$credit = input$credit
+      shinydata$prior_default = ifelse(input$default == "Yes", 1, 0)
+      shinydata$marriedu = ifelse(input$marital == "Single", 1, 0)
+      shinydata$marriedy = ifelse(input$marital == "Married", 1, 0)
+      # Call stack model for prediction
+      # Assuming DT_model_second_level_prediction is a vector of probabilities
+      decision <- predict(DT_model, newdata = shinydata)  
+      
+      paste("Credit Card Approval Decision: ", paste(decision, collapse = ", "))
+    }
+  })
+}
+
+shinyApp(ui, server)
+```
+
+```{r}
+ui <- dashboardPage(
+  dashboardHeader(title = "Credit Card Application"),
+  dashboardSidebar(),
+  dashboardBody(
+    fluidRow(
+      box(
+        title = "Personal Application Questions",
+        width = 6,
+        solidHeader = TRUE,
+        sliderInput("age", "Select your age:",
+                    min = 0, max = 150, value = 2),
+        radioButtons("gender", "Select your gender:",
+                     choices = c("Male", "Female")),
+        radioButtons("marital", "Select your marital status:",
+                     choices = c("Married", "Single")),
+        radioButtons("credit", "Have you previously had a credit card:",
+                     choices = c("Yes", "No")),
+        radioButtons("default", "Have you had a prior default with a credit card:",
+                     choices = c("Yes", "No")),
+         radioButtons("employed", "Are you employed:",
+                     choices = c("Yes", "No")),
+        sliderInput("income", "Select your annual income:",
+                    min = 0, max = 100000, value = 5000),
+        sliderInput("creditscore", "If you have a prior credit card, please select your current credit score:",
+                    min = 0, max = 67, value = 5),
+        actionButton("submit", "Submit"),
+        verbatimTextOutput("result")
+      )
+    )
+  )
+)
+
+server <- function(input, output) {
+output$result <- renderPrint({
+  if (!is.null(input$submit) && input$submit > 0) {
+    input_data <- data.frame(
+      age = input$age,
+      gender = input$gender,
+      marital = input$marital,
+      credit = input$credit,
+      creditscore = input$creditscore,
+      default = input$default,
+      employed = input$employed,
+      income = input$income
+    )
+    
+    # Print input_data for debugging
+    print("Input Data:")
+    print(input_data)
+    
+    shinydata$age = input$age
+    shinydata$income = input$income
+    shinydata$credit_score = as.numeric(input$creditscore)
+    shinydata$employedt = ifelse(input$employed == "Yes", 1, 0)
+    shinydata$gendera = ifelse(input$gender == "Male", 1, 0)
+    shinydata$genderb = ifelse(input$gender == "Female", 1, 0)
+    shinydata$credit = input$credit
+    shinydata$prior_default = ifelse(input$default == "Yes", 1, 0)
+    shinydata$marriedu = ifelse(input$marital == "Single", 1, 0)
+    shinydata$marriedy = ifelse(input$marital == "Married", 1, 0)
+    
+    # Print shinydata for debugging
+    print("Shiny Data:")
+    print(shinydata)
+    
+    # Call stack model for prediction
+    # Assuming DT_model_second_level_prediction is a vector of probabilities
+    decision <- predict(DT_model, newdata = shinydata)  
+    
+    # Print decision for debugging
+    print("Decision:")
+    print(decision)
+    
+    paste("Credit Card Approval Decision: ", paste(decision, collapse = ", "))
+  }
+})
+}
+shinyApp(ui, server)
+```
+

@@ -1,0 +1,144 @@
+---
+title: "01. Preprocessing"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+author: "Group 6 - Team Worldwide"
+date: "2023-12-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document covers the pre-processing of the credit card approval data being used within the project. The initial dataset contains 16 variables and 653 observations many of which required manipulation, cleaning, or factorizing. Thus, the cleaning process is illustrated below. The cleaned data sets within this document are used in the following r-markdowns for model building, running, and analysis.  
+
+# Section 0: Abstract
+  For our second group project, we have decided to look at Credit Card Approval data as a means of better understanding what factors determine whether or not an individual is issued a credit card. The variables within this data set include the following:
+
+## 0-1. Explanation of the dataset
+```{r}
+library(knitr)
+
+  #(1) application_record.csv
+data <- data.frame(Predictor_Variables = c("Gender", "Age", "Debt", "Married", "Bank Customer", "Education Level", "Ethnicity", "Income", "Years Employed", "Prior Default", "Employed", "Credit Score", "Drivers License", "Citizen", "Zipcode", "FLAG_EMAIL", "OCCUPATION_TYPE", "CNT_FAM_MEMBERS"))
+
+data2 <- data.frame(Response_Varible = "approval_status")
+
+kable(data, caption = "File - Application Record", format = "html", table.attr = "class='table'")
+
+kable(data2, caption = "File - Application Record", format = "html", table.attr = "class='table'")
+```
+
+## 0-2. Business Questions & Solutions
+By analyzing these variables we are able to better understand the factors that are most important for receiving a credit card and provide discussion on ways the individuals who have previously been denied can improve and eventually receive a credit card. The question targeted throughout this analysis is understanding what can be done to improve the odds of being approved for a credit card and determining what factors are most important in being remediated to receive a card should a prospective cardholder be denied.
+
+
+# Section 1: Pre-processing the data
+## 1.1: Loading/Attaching Packages
+
+Within our libraries section we load all of the libarires needed to run our code and complete our models and analysis. There are 3 libraries run in total for this project.
+
+```{r}
+library(class)
+library(caret)
+library(neuralnet)
+library(kernlab)
+library(C50)
+```
+
+## 1.2: Downloading and Prepping the Data
+
+The data used to conduct our analysis is the cc_approval data 
+set which is downloaded within this chunk. The data is read in such that all variables are converted to factors initially. From there the age variable is manipulated to make it compatible with the models being run converting it to be a numeric character. Marriage, gender, and ethnicity were then altered to ensure that the variables' original multi-levels will be combined. Approval stats and prior default were then changed to be made binary variables and zip code followed the same level combining and binary changing process. Lastly, the unneeded levels were dropped and a summary and str were produced. 
+
+(1) change age value to be numeric
+(2) Remove the data pertaining "?"
+(3) Convert the approval_status to a numeric value(0,1)
+(4) Transform prior_default to a numeric representation(0,1)
+(5) zipcode with the highest amount among the zip codes(00000) is changed to 1, while others are changed to 0
+(6) Utilize droplevels() to eliminate unnecessary levels from a factor variable.
+
+```{r, cache=TRUE}
+cc <- read.csv("cc_approvals.csv", stringsAsFactors = TRUE)
+
+#(1) change age value to be numeric
+#(2) Remove the data pertaining "?"
+cc <- cc[-which(cc$age == "?"), ]
+cc$age <- as.numeric(as.character(cc$age))
+cc <- cc[-which(cc$married == "?"), ]
+cc <- cc[-which(cc$gender == "?"), ]
+cc <- cc[-which(cc$ethnicity == "?"), ]
+
+#(3) Convert the approval_status to a numeric value(0,1)
+cc$approval_status <- ifelse(cc$approval_status == "+", 1, 0)
+
+#(4) Transform prior_default to a numeric representation(0,1)
+cc$prior_default <- ifelse(cc$prior_default == "f", 0, 1)
+
+#(5) zipcode with the highest amount among the zip codes(00000) is changed to 1, while others are changed to 0
+cc <- cc[-which(cc$zip_code == "?"), ]
+cc$zip_code <- ifelse(cc$zip_code == "00000", 1, 0)
+
+
+#(6) Utilize droplevels() to eliminate unnecessary levels from a factor variable.
+cc <- droplevels(cc)
+
+summary(cc)
+str(cc)
+```
+
+
+(7) Consolidating education_level and ethnicity
+- In the initial data set education level and ethnicity were both randomly assigned letters and numbers mean to represent a specific coded ethnicity or education level to keep them randomized and hidden. Given this aspect of the data, each education and ethnicity were assigned letters for clarity and ease of analyzing the data.
+```{r}
+# education
+cc$education_level<- as.character(cc$education_level)
+cc$education_level <- ifelse(cc$education_level == "j" | cc$education_level == "ff",
+                             "e1", cc$education_level)
+cc$education_level <- ifelse(cc$education_level == "x" | cc$education_level == "e"
+                             | cc$education_level == "w" | cc$education_level == "cc"
+                             | cc$education_level == "i" | cc$education_level == "q"
+                             | cc$education_level == "c" | cc$education_level == "d",
+                             "e2", cc$education_level)
+cc$education_level <- ifelse(cc$education_level == "r" | cc$education_level == "k"
+                             | cc$education_level == "m", "e3", cc$education_level)
+cc$education_level <- as.factor(cc$education_level)
+
+# ethnicity
+cc$ethnicity <- as.character(cc$ethnicity)
+cc$ethnicity <- ifelse(cc$ethnicity == "o" | cc$ethnicity == "j",
+                       "eth1", cc$ethnicity)
+cc$ethnicity <- ifelse(cc$ethnicity == "ff" | cc$ethnicity == "dd",
+                       "eth2", cc$ethnicity)
+cc$ethnicity <- ifelse(cc$ethnicity == "n" | cc$ethnicity == "z" | cc$ethnicity == "h"
+                       | cc$ethnicity == "v", "eth3", cc$ethnicity)
+cc$ethnicity <- as.factor(cc$ethnicity)
+```
+
+
+## 1.3: Getting Data Ready for Analysis
+
+To ensure that the data is prepared for model analysis it is further cleaned. ccmm data is created using model.matrix such that all factors are transformed into dummy variables so that a knn model can be run. The dummy variables are necessary for knn as that model requires all numeric inputs. Afterwards, the data is normalized to be used within the ANN and KNN models.
+```{r, cache=TRUE}
+ccmm <- as.data.frame(model.matrix(~.-1,cc))
+
+#1) normalizing the data - for KNN, ANN
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+cc_norm <- as.data.frame(lapply(ccmm, normalize))
+```
+
+
+## 1.4: saving RDS of ccmm and cc_norm
+The data was then saved via RDS to be used within the other markdown files.
+```{r}
+saveRDS(ccmm, "ccmm.rds")
+saveRDS(cc_norm, "cc_norm.rds")
+```
+

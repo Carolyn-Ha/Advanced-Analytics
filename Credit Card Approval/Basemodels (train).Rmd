@@ -1,0 +1,319 @@
+---
+title: "02-2. Basemodels & Second Level Model"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+author: "Group 6 - Team Worldwide"
+date: "2023-12-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Section 0: Introduction
+
+## Predicting Credit Card Approval Status Using Predictive Stack Models and Second Level Decision Trees
+  Online transactions, cashless payments, and the requirement for a line of credit to access many necessities in life has made a credit card almost essential. However, not every individual is able to get a credit card as obtaining one requires an application process where a number of different personal details must be divulged. From this self reported information -such as race, age, income, education, citizen status, etc.- a verdict is reached by the credit card company on whether or not the applicant will be approved. Being denied can be an extremely disheartening scenario and many are left wondering what they did wrong or how they can eventually improve to be approved. These questions and desires to improve are a gap within business that can be filled through the usage of predictive data modeling and analysis. Companies aimed at improving credit scores and getting applicants approved as well as banks who actively issue their own card and look to determine if applicants are a good fit or not have the opportunity to capitalize off of this business gap. Our team has crafted a data modeling algorithm that allows all parties to see which factors truly influence approval or declination and allows them to see if they would receive a card based on their current standings. With access to this new information, this offers them the opportunity to work on the areas that are lacking and eventually get approved for a card.
+  The following models and data are designed to find which variables are the most influential in the verdict and develop a model that is highly accurate in predicting whether or not an individual will be rejected or accepted by the credit card company or bank. The dataset selected contains 16 different variables and 653 observations. Given the limited size of the data, the data is cross-validated 4 times to ensure that as much information can be extracted as possible. With the data, a logistic regression, KNN, ANN, SVM, and decision tree model are built at the first level. These are then combined into one stack model which is then used at the second level to build a second level decision tree to most accurately predict credit card approval status. Confusion matrices are created for each model as well to determine model efficacy as well as false negative and false positive rates.
+
+
+# Section 1: Pre-processing the data
+## 1.1: Loading/Attaching Packages
+
+Within our libraries section we load all of the libarires needed to run our code and complete our models and analysis. There are 3 libraries run in total for this project.
+
+```{r}
+library(class)
+library(caret)
+library(neuralnet)
+library(kernlab)
+library(C50)
+library(randomForest)
+```
+
+## 1.2: downloading preprocessed data
+- KNN, ANN: use cc_norm
+- logistic regression, SVM, DT, Random Forest: use ccmm
+```{r}
+ccmm <- readRDS("ccmm.rds")
+cc_norm <- readRDS("cc_norm.rds")
+```
+
+# Section 2: Building the Model(First Level)
+
+When constructing the initial level models, we employed the training method with cross-validation. This approach was chosen due to the limited size of the original dataset, comprising only 691 observations. After data cleaning, the dataset was reduced to 653 observations. If we were to allocate a specific portion for testing and the remainder for training, the dataset available for the development of the second-level model would be insufficient, posing challenges for generalizing the model effectively. Consequently, we opted for a 4-fold cross-validation strategy, where each part serves as the training set in one iteration, and the remaining parts collectively form the test set. This ensures that the dataset for constructing the second-level decision tree still encompasses 653 observations.
+
+## 2.1: Logistic Regression
+
+Below, the first level regression model is built. A random sample is pulled and cross validation is conducted to ensure the data can be fully utilized given how limited it is. The model is then built using all of the variables within the data set and a prediction and confusion matrix were then drawn up. 
+The GLM_prediction function generates a dataframe containing the probabilities of the variable being 0 and 1. As our objective is to predict the probability of the variable becoming 1, we selected the subset GLM_prediction[, -1] to create the binprediction.
+```{r, cache=TRUE}
+
+# 1) Building the logistic regression model
+set.seed(12345)
+GLM_ctrl <- trainControl(method = "cv", number = 4, selectionFunction = "oneSE")
+
+GLM_model <- train(as.factor(approval_status) ~ ., 
+                   data = ccmm, 
+                   method = "glm", 
+                   family = "binomial",
+                   trControl = GLM_ctrl)
+
+# 2) Predicting
+GLM_prediction <- predict(GLM_model, newdata = ccmm, type = "prob")
+GLM_binprediction <- ifelse(GLM_prediction[,-1] >= 0.2, 1, 0)
+
+# 3) Evaluating the model
+confusionMatrix(as.factor(GLM_binprediction),
+                as.factor(ccmm$approval_status), positive = '1')
+
+```
+- **GLM Results**: Based off of this first model, we see a kappa of 0.72 and a model accuracy of 86%. This indicates a high level of success within this model, however, given the number of false negatives and positives relative to the size of the total data we can see that this is not the most accurate model to use. 
+
+
+
+## 2.2: KNN
+The KNN model was the second model build and first a random sample is pulled. The KNN is then built using a number of specifications to increase accuracy and data compatibility. A prediction and confusion matrix are then created. 
+KNN_grid is formulated to experiment with various values of the k variable in training and determine the optimal choice.
+```{r, cache=TRUE}
+
+# 1) Building the model with cross-validation
+set.seed(12345)
+KNN_ctrl <-trainControl(method = "cv", number = 4, selectionFunction = "oneSE") # 4-fold cross-validation
+KNN_grid <- expand.grid(.k = seq(1,3, by=1))
+
+
+KNN_model <- train(as.factor(approval_status) ~., 
+               data = cc_norm, 
+               method = "knn", 
+               metric = "Kappa",
+               trControl = KNN_ctrl, 
+               tuneGrid = KNN_grid)
+
+# 2) Predicting
+KNN_prediction <- predict(KNN_model, newdata = cc_norm)
+
+
+# 3) Evaluating the model
+confusionMatrix(as.factor(KNN_prediction),
+                as.factor(cc_norm$approval_status), positive = '1')
+```
+- **KNN Results**: We can see that with a kappa of 0.77 and an accuracy of 88% that this model is more accurate than the logistic regression was. However, again, the concern here is the level of false negative and positive relative to the size of the data. 
+
+
+
+## 2.3: ANN
+- "ANN_grid": data frame containing all possible combinations of the specified values for the .size and .decay hyperparameters. This grid is likely to be used in a grid search approach to find the optimal combination of these hyperparameters when training an artificial neural network.
+- ".size": hyperparameter representing the number of neurons (nodes) in the hidden layer of an artificial neural network (ANN). The seq(5, 20, by = 5) generates a sequence of values from 5 to 20 with a step size of 5. This means that the .size hyperparameter will take values 5, 10, 15, and 20.
+- ".decay": hyperparameter related to weight decay in the context of training neural networks. Weight decay is a regularization technique that adds a penalty term to the loss function based on the magnitude of the weights. The values specified in c(0.1, 0.01, 0.001, 0.0001) represent different levels of decay that will be tried during the model training process.
+```{r, cache=TRUE}
+
+# 1) Building the model with cross-validation
+set.seed(12345)
+ANN_ctrl <- trainControl(method = "cv", number = 4, selectionFunction = "oneSE")
+
+ANN_grid <- expand.grid(.size = seq(5, 20, by = 5), .decay = c(0.1, 0.01, 0.001, 0.0001))
+
+# perform automated parameter tuning for ANN
+ANN_model <- train(as.factor(approval_status)~.,
+               data=cc_norm,
+               preProcess = "scale",
+               method = "nnet",
+               metric = "Kappa",
+               trControl = ANN_ctrl,
+               tuneGrid = ANN_grid,
+               trace = FALSE)
+
+# 2) Predicting
+ANN_prediction <- predict(ANN_model, newdata = cc_norm)
+
+# 3) Evaluating the model
+confusionMatrix(as.factor(ANN_prediction), as.factor(cc_norm$approval_status), positive = '1')
+```
+- **ANN Results**: With this new model we again see our kappa statistic and accuracy percentage increase to 0.78 and 89%. False negatives and false positives are both lower on this model than on the previous one, however they still could fall to increase confidence in the model.
+
+
+
+## 2.4: SVM
+
+After experimenting with various SVM kernels (svmLinear, svmRadial, svmPoly, svmRadialSigma), we opted for svmRadialSigma to construct our SVM model, as it demonstrated the highest Kappa value.
+
+During the training of the SVM model using the ksvm function, we observed that anovadot yielded the highest Kappa. However, building the model with ksvm required splitting the dataset into training and test sets, resulting in reduced prediction outputs. This mismatch in dataset lengths would have posed challenges for constructing the second-level decision tree. Consequently, we decided to utilize the train-svmRadialSigma approach to build our first-level SVM model.
+```{r, cache=TRUE}
+
+# 1) Building the model with cross-validation
+set.seed(12345)
+
+SVM_model <- train(approval_status ~ .,
+                   preProcess=c("center", "scale"),
+                   data = ccmm,
+                   method = "svmRadialSigma",
+                   trControl = trainControl(method = "cv", number = 4))
+
+# 2) Predicting
+SVM_prediction <- predict(SVM_model, newdata = ccmm)
+
+# 3) Evaluating the model
+SVM_binprediction <- ifelse(SVM_prediction >= 0.2, 1, 0)
+
+
+confusionMatrix(as.factor(SVM_binprediction), as.factor(ccmm$approval_status), positive = '1')
+```
+- **SVM Results**: In this model the kappa statistic and accuracy both drop with false negatives and postivives increase as well. While this is weaker than the other models both values remain relavitely high allowing us confidence that this model can predict with strong accuracey whether or not an individual will be approved or rejected for a credit card.
+
+
+
+## 2.5: Decision Tree
+Below a decision tree model is built with cross validation, predicted upon, and plotted. 
+```{r, cache=TRUE}
+library(caret)
+
+# 1) Building the model with cross-validation
+set.seed(12345)
+DT_model <- train(as.factor(approval_status) ~ .,
+                  data = ccmm,
+                  method = "C5.0",
+                  trControl = trainControl(method = "cv", number = 4),
+                  )  # 4-fold cross-validation
+
+# 2) Predicting
+DT_prediction <- predict(DT_model, newdata = ccmm)
+plot(DT_model)
+
+# 3) Evaluating the model
+confusionMatrix(as.factor(DT_prediction),
+                as.factor(ccmm$approval_status), positive = '1')
+
+#install.packages("rpart")
+#install.packages("rpart.plot")
+library(rpart)
+library(rpart.plot)
+fit <- rpart(as.factor(approval_status) ~ ., data = ccmm, method = 'class')
+rpart.plot(fit)
+```
+- **DT Results**: The decision tree model yields the second highest kappa of 0.91 and accuracy of 95% meaning that this model is extremely successful. A key part of that has to do with the fact that it allows for an illustration of its decision making process and its multiple avenues to reaching a conclusive output. This helps create a more accurate outcome. This model is what helped us to decide which variables were the most influential in approval status and served as the backbone for the ShinyDashboard quiz built. From the illustration of the tree, we can see that prior default is extremely influential as answering yes to having a prior default meant an immediate rejection. Additionally, employment status, income less than 450, large amounts of debt, and an increased age all were factors that were more likely to get an applicnt rejected. 
+
+
+## 2.6: Random Forest
+RF_grid <- expand.grid(.mtry = c(1, 3, 6, 9, 12)) is used to create a grid of tuning parameters for Random Forest modeling in R. Let's break down what each part of this code does:
+- "mtry": hyperparameter that represents the number of variables randomly sampled at each split when growing a tree. It controls the diversity of the individual trees in the ensemble.
+
+```{r, cache=TRUE}
+set.seed(12345)
+#1) Building Random Forest
+RF_ctrl <- trainControl(method = "cv", number=4, 
+                     selectionFunction="oneSE")
+
+RF_grid <- expand.grid(.mtry=c(1,3,6,9,12))
+
+RF_model <- train(as.factor(approval_status) ~ . , data=ccmm, 
+                  method="rf", trControl=RF_ctrl, tuneGrid = RF_grid)
+
+#2) making prediction
+RF_prediction <- predict(RF_model, ccmm)
+
+#3) evaluating the model
+confusionMatrix(as.factor(RF_prediction), as.factor(ccmm$approval_status), positive="1")
+```
+- **Random Forest Results**: The random forest model had the highest kappa and accuracy of 0.9197 and 96% making this model the best for predicting. Additionally, false positives and negatives were minimized to the lowest of all the models. 
+
+
+## 2.7. Summary of predictions
+
+We plan to utilize the raw predictions from each first-level model as input values for the second-level model. The binprediction generated for each first-level model was solely used for assessing the kappa and accuracy of individual models. Consequently, we will not use binprediction for the second-level models; instead, we will employ the raw predictions.
+
+To characterize the prediction values, we conducted a summary check to determine whether they are factors, numeric, or dataframe variables. SVM is unique in that it provides a numeric output representing the actual probability of approval_status being 1. We will retain this numeric value, while treating other variables as factors.
+
+Regarding GLM_prediction, it produces a dataframe containing the probabilities of each prediction being either 0 or 1. Since our interest lies in the probability of it being 1, we specifically extracted and will use only the GLM_prediction[, -1] as the input for the second-level model.
+```{r}
+summary(GLM_prediction)
+  #dataframe
+#[,-1]
+summary(KNN_prediction)
+  #factor
+summary(ANN_prediction)
+  #factor
+summary(SVM_prediction)
+  #numeric
+summary(DT_prediction)
+  #factor
+summary(RF_prediction)
+  #factor
+```
+
+# Section 3: Second level model (Decision Tree)
+## 3.1: Combine Vectors
+All of the model predicition results are combined to create a stack model of approvals. 
+```{r, cache=TRUE}
+approval_preds <- data.frame(
+  log = GLM_prediction[,-1],
+  KNN = KNN_prediction,
+  ANN = ANN_prediction,
+  svm = SVM_prediction,
+  Decision_Tree = DT_prediction,
+  Random_Forest = as.numeric(as.character(RF_prediction)),
+  True = ccmm$approval_status
+)
+
+head(approval_preds)
+str(approval_preds)
+```
+
+
+## 3.2: New train & test datasets for the second level model
+
+Below a new set of train and test data is created based upon the stack model above. A random sample is taken and then 30% of the data is pushed into training and 70% into testing.
+We allocated 70% of the input values for the training set and reserved 30% for the test set.
+```{r, cache=TRUE}
+#1) use 30% for training & 70% for testing
+set.seed(12345)
+tree_rows <- sample(1:nrow(approval_preds), 0.7*nrow(approval_preds))
+
+tree_train <- approval_preds[tree_rows, ]
+tree_test <- approval_preds[-tree_rows, ]
+```
+
+
+## 3.3: Build Second Level Decision Tree
+
+A second level decision tree was then built using this new data and an error cost matrix looking to minimize errors and create the most accurate model. The second level decision tree pulls from all the previous first level models in making its prediction. A confusion matrix and plot were then created based upon the prediction
+```{r, cache=TRUE}
+#2) build second level Decision Tree model
+error_cost <- matrix(c(0, 0, 1, 0), nrow = 2)
+DT_model_second_level <- C5.0(as.factor(True)~., data=tree_train, costs = error_cost)
+
+#3) predicting
+DT_model_second_level_prediction <- predict(DT_model_second_level, tree_test)
+
+#4) evaluating
+confusionMatrix(as.factor(DT_model_second_level_prediction), as.factor(tree_test$True), positive="1")
+
+plot(DT_model_second_level)
+#summary(DT_model_second_level)
+```
+- **Second level DT Results**: The second level model yielded a high kappa of 0.90 and accuracy of 95% making this a highly effective model. While the outcomes were slightly lower than the individual results of the first level random forest and decision tree models we attributed that to the other first level model which had lower values as bringing down the accuracy and efficacy. What is most impressive about this model is the false positive and false negative rate. The model only mis-predicted 9 candidates which means that this is highly effective in use. 
+
+# Section 4: Conclusion
+```{r}
+#2) creating the dataframe with the results
+model_names <- c("Logistic Regression", "KNN", "ANN", "SVM", "Decision Tree", "Random Forest", "Decision Tree (Second Level)")
+
+data <- data.frame(
+  "False Negative" = c(15, 32, 9, 15, 16, 12, 5),
+  "False Positive" = c(76, 25, 11, 73, 12, 14, 1), 
+  "Kappa" = c(0.7237, 0.8235, 0.9382, 0.7326, 0.9134, 0.9197, 0.9383),
+  "Accuracy" = c(0.8606, 0.9127, 0.9694, 0.8652, 0.9571, 0.9602, 0.9694)
+)
+
+#3) Set row names for the data frame
+rownames(data) <- model_names
+
+data_df <- as.data.frame(data)
+knitr::kable(data_df, align = "c")
+```
+  Based on the above models we can see that using a model that incorporates more than one other models yields the highest accuracy and best predictability. The second level model highlights that random forest, decision tree, and KNN are the most successful first level models and thus should only one model be used, a company should opt to use one of those three for making their predictions. While first models are insightful, the second level decision tree model is most useful and accurate when being utilized by a credit card company, bank, or individual as it is least likely to give a false answer which in turn minimizes costs for banks and credit card companies who could potentially offer a card to a risky customer as well as maximizing personal gain by ensuring that very few people who should be accepted get rejected. 
+  Individuals looking to be approved for a credit card are judged on a number of factors, however, some are more influential than others. Based on the results of the models built, it became clear that race, education level, income, prior default, and credit were most indicative of if someone would be approved or not. Income and credit were two of the most important and highlighted that should a bank or credit score company want to guide an individual towards approval status, those should be the areas first looked at given their importance and ability to be altered. Establishing a line of credit is imperative and thus should be the first step taken by anyone looking for a card approval. Similarly, if one is on the fence raising income by seeking either additional employment or a raise would be influential in being able to access a card. One of the harder factors to change that is vital to receiving a card is prior default. Those who have defaulted on a payment struggle to get approved for a new card. A credit score company or bank can use this information as an opportunity to guide the individual to stay with their initial card or to potentially launch a new card line aimed at individuals who have struggled with payments in the past but have shown upward trajectory to allow them to build more credit and reputability to eventually receive a different card. While race and education level were coded so it could not be directly identified as to which race and education level was most desired it was clear based on the GLM model that they are important. Race is a factor that cannot be changed but education level is an area where one could in theory advance. Thus, the model's inability to determine which education level is most desirable is a shortcoming and an area for further refinement in the future. 
